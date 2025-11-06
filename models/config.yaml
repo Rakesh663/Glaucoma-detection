@@ -1,0 +1,74 @@
+# Glaucoma Detection Configuration - Optimized for ACRIMA
+
+# Data paths
+data:
+  train_dir: "data/train"
+  val_dir: "data/val"
+  test_dir: "data/test"
+  image_size: 512
+  num_workers: 4
+
+# Model configuration
+model:
+  architecture: "efficientnet_b0"
+  num_classes: 1
+  pretrained: true
+  dropout: 0.4
+
+# Training parameters
+training:
+  batch_size: 16
+  num_epochs: 100
+  learning_rate: 0.0003
+  weight_decay: 0.0001
+  scheduler: "cosine"
+  early_stopping_patience: 15
+  gradient_clip: 1.0
+
+# Data augmentation - Aggressive for better generalization
+augmentation:
+  horizontal_flip: 0.5
+  vertical_flip: 0.5
+  rotation_limit: 20
+  brightness_limit: 0.3
+  contrast_limit: 0.3
+  blur_limit: 5
+  normalize:
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+
+# Loss and metrics
+loss:
+  type: "bce"
+  focal_gamma: 2.0
+
+# Evaluation
+evaluation:
+  threshold: 0.5
+  target_specificity: 0.95
+
+# CPU optimization
+cpu:
+  num_threads: 8
+  use_mkldnn: true
+  channels_last: true
+  quantize_model: false
+
+# Production API
+api:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 1
+  
+# Logging
+logging:
+  level: "INFO"
+  save_dir: "logs"
+  tensorboard: true
+
+# Model saving
+checkpoint:
+  save_dir: "models"
+  save_best_only: true
+  monitor: "val_auc"
+  mode: "max"

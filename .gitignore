@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Data folders
+data/
+*.csv
+*.jpg
+*.jpeg
+*.png
+*.npy
+
+# Model files (large)
+models/*.pth
+models/*.pt
+models/*.onnx
+*.h5
+*.pb
+
+# Keep config files in models
+!models/config.yaml
+
+# Logs
+logs/
+*.log
+runs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Environment
+.env
+.env.local
+
+# Temporary files
+*.tmp
+*.bak
