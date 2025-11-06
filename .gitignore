@@ -29,7 +29,8 @@ models/*.onnx
 *.h5
 *.pb
 
-# Keep config files in models
+# Keep trained model and config for team use
+!models/best_model.pth
 !models/config.yaml
 
 # Logs
