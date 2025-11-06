@@ -37,6 +37,7 @@ models/*.onnx
 logs/
 *.log
 runs/
+evaluation_results/
 
 # IDE
 .vscode/
