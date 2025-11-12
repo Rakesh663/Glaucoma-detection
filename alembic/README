@@ -1,0 +1,18 @@
+Generic single-database configuration.
+
+To create a new migration:
+    alembic revision --autogenerate -m "description of changes"
+
+To apply migrations:
+    alembic upgrade head
+
+To revert one migration:
+    alembic downgrade -1
+
+To see current revision:
+    alembic current
+
+To see migration history:
+    alembic history
+
+Migrations are automatically applied at API startup.

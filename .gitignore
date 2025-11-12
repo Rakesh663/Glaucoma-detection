@@ -54,7 +54,23 @@ desktop.ini
 # Environment
 .env
 .env.local
+.env.production
 
 # Temporary files
 *.tmp
 *.bak
+
+# Docker
+docker-compose.override.yml
+
+# Kubernetes secrets
+k8s/secrets/*.yaml
+!k8s/secrets/*.example.yaml
+
+# Alembic
+alembic/versions/*.pyc
+
+# Keep deploy configs but not data
+!deploy/
+!deploy/**/*.yml
+!deploy/**/*.yaml

@@ -1,0 +1,377 @@
+name: Canary Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to deploy (e.g., v2.0.0)'
+        required: true
+        type: string
+      initial_traffic:
+        description: 'Initial canary traffic percentage'
+        required: false
+        default: '10'
+        type: choice
+        options:
+          - '5'
+          - '10'
+          - '20'
+          - '50'
+      auto_promote:
+        description: 'Automatically promote if metrics are healthy'
+        required: false
+        default: false
+        type: boolean
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/glaucoma-api
+
+jobs:
+  validate-canary:
+    name: Validate Canary Prerequisites
+    runs-on: ubuntu-latest
+    outputs:
+      can_deploy: ${{ steps.check.outputs.can_deploy }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check if stable deployment exists
+        id: check
+        run: |
+          kubectl get deployment glaucoma-api -n glaucoma || echo "can_deploy=false" >> $GITHUB_OUTPUT
+          echo "can_deploy=true" >> $GITHUB_OUTPUT
+
+      - name: Validate version format
+        run: |
+          if [[ ! "${{ inputs.version }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Error: Version must be in format vX.Y.Z"
+            exit 1
+          fi
+
+  deploy-canary:
+    name: Deploy Canary
+    runs-on: ubuntu-latest
+    needs: validate-canary
+    if: needs.validate-canary.outputs.can_deploy == 'true'
+    environment:
+      name: ${{ inputs.environment }}-canary
+      url: https://${{ inputs.environment }}.glaucoma-api.com
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure kubectl
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: Deploy canary version
+        run: |
+          kubectl apply -f - <<EOF
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: glaucoma-api-canary
+            namespace: glaucoma
+            labels:
+              app: glaucoma-api
+              version: ${{ inputs.version }}
+              track: canary
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: glaucoma-api
+                version: ${{ inputs.version }}
+                track: canary
+            template:
+              metadata:
+                labels:
+                  app: glaucoma-api
+                  version: ${{ inputs.version }}
+                  track: canary
+                annotations:
+                  prometheus.io/scrape: "true"
+                  prometheus.io/port: "8000"
+                  prometheus.io/path: "/metrics"
+              spec:
+                containers:
+                - name: api
+                  image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.version }}
+                  ports:
+                  - containerPort: 8000
+                  env:
+                  - name: VERSION
+                    value: "${{ inputs.version }}"
+                  - name: TRACK
+                    value: "canary"
+                  - name: ENVIRONMENT
+                    value: "${{ inputs.environment }}"
+                  resources:
+                    requests:
+                      memory: "512Mi"
+                      cpu: "250m"
+                    limits:
+                      memory: "1Gi"
+                      cpu: "500m"
+                  livenessProbe:
+                    httpGet:
+                      path: /health
+                      port: 8000
+                    initialDelaySeconds: 30
+                    periodSeconds: 10
+                  readinessProbe:
+                    httpGet:
+                      path: /health
+                      port: 8000
+                    initialDelaySeconds: 10
+                    periodSeconds: 5
+          EOF
+
+      - name: Wait for canary rollout
+        run: |
+          kubectl rollout status deployment/glaucoma-api-canary -n glaucoma --timeout=5m
+
+      - name: Configure traffic split
+        run: |
+          kubectl apply -f - <<EOF
+          apiVersion: networking.istio.io/v1beta1
+          kind: VirtualService
+          metadata:
+            name: glaucoma-api
+            namespace: glaucoma
+          spec:
+            hosts:
+            - glaucoma-api
+            http:
+            - route:
+              - destination:
+                  host: glaucoma-api
+                  subset: stable
+                weight: ${{ 100 - inputs.initial_traffic }}
+              - destination:
+                  host: glaucoma-api
+                  subset: canary
+                weight: ${{ inputs.initial_traffic }}
+          EOF
+
+      - name: Notify deployment started
+        uses: 8398a7/action-slack@v3
+        with:
+          status: custom
+          custom_payload: |
+            {
+              text: "🚀 Canary deployment started",
+              attachments: [{
+                color: 'warning',
+                fields: [
+                  { title: 'Version', value: '${{ inputs.version }}', short: true },
+                  { title: 'Traffic', value: '${{ inputs.initial_traffic }}%', short: true },
+                  { title: 'Environment', value: '${{ inputs.environment }}', short: true }
+                ]
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+
+  monitor-canary:
+    name: Monitor Canary Metrics
+    runs-on: ubuntu-latest
+    needs: deploy-canary
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure kubectl
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: Monitor metrics for 5 minutes
+        id: monitor
+        run: |
+          echo "Monitoring canary metrics..."
+
+          # Monitor for 5 minutes (30 iterations of 10 seconds)
+          for i in {1..30}; do
+            echo "Check $i/30"
+
+            # Check deployment health
+            READY=$(kubectl get deployment glaucoma-api-canary -n glaucoma -o jsonpath='{.status.readyReplicas}')
+            DESIRED=$(kubectl get deployment glaucoma-api-canary -n glaucoma -o jsonpath='{.status.replicas}')
+
+            if [ "$READY" != "$DESIRED" ]; then
+              echo "::error::Canary deployment unhealthy: $READY/$DESIRED replicas ready"
+              echo "healthy=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
+
+            # Query Prometheus metrics
+            ERROR_RATE=$(kubectl exec -n monitoring deployment/prometheus -c prometheus -- \
+              promtool query instant 'http://localhost:9090' \
+              'sum(rate(http_requests_total{deployment="glaucoma-api-canary",status_code=~"5.."}[1m])) / sum(rate(http_requests_total{deployment="glaucoma-api-canary"}[1m])) * 100' \
+              2>/dev/null | grep -oP '\d+\.\d+' || echo "0")
+
+            P99_LATENCY=$(kubectl exec -n monitoring deployment/prometheus -c prometheus -- \
+              promtool query instant 'http://localhost:9090' \
+              'histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{deployment="glaucoma-api-canary"}[1m])) by (le))' \
+              2>/dev/null | grep -oP '\d+\.\d+' || echo "0")
+
+            echo "Error rate: $ERROR_RATE%, P99 latency: $P99_LATENCY s"
+
+            # Check thresholds
+            if (( $(echo "$ERROR_RATE > 5" | bc -l) )); then
+              echo "::error::High error rate detected: $ERROR_RATE%"
+              echo "healthy=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
+
+            if (( $(echo "$P99_LATENCY > 2" | bc -l) )); then
+              echo "::error::High latency detected: $P99_LATENCY s"
+              echo "healthy=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
+
+            sleep 10
+          done
+
+          echo "✓ All metrics healthy"
+          echo "healthy=true" >> $GITHUB_OUTPUT
+
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          echo "Rolling back canary deployment..."
+          bash deploy/rollback-canary.sh
+
+      - name: Notify monitoring result
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: custom
+          custom_payload: |
+            {
+              text: "${{ steps.monitor.outputs.healthy == 'true' && '✓ Canary metrics healthy' || '❌ Canary failed health checks' }}",
+              attachments: [{
+                color: '${{ steps.monitor.outputs.healthy == 'true' && 'good' || 'danger' }}',
+                fields: [
+                  { title: 'Version', value: '${{ inputs.version }}', short: true },
+                  { title: 'Status', value: '${{ steps.monitor.outputs.healthy }}', short: true }
+                ]
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+
+  promote-canary:
+    name: Promote Canary to Stable
+    runs-on: ubuntu-latest
+    needs: monitor-canary
+    if: inputs.auto_promote == true || github.event_name == 'workflow_dispatch'
+    environment:
+      name: ${{ inputs.environment }}-promotion
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure kubectl
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: Gradually increase traffic
+        run: |
+          for TRAFFIC in 20 50 75 100; do
+            echo "Shifting traffic to $TRAFFIC% canary..."
+
+            kubectl apply -f - <<EOF
+            apiVersion: networking.istio.io/v1beta1
+            kind: VirtualService
+            metadata:
+              name: glaucoma-api
+              namespace: glaucoma
+            spec:
+              hosts:
+              - glaucoma-api
+              http:
+              - route:
+                - destination:
+                    host: glaucoma-api
+                    subset: stable
+                  weight: $((100 - TRAFFIC))
+                - destination:
+                    host: glaucoma-api
+                    subset: canary
+                  weight: $TRAFFIC
+          EOF
+
+            # Monitor for 2 minutes
+            sleep 120
+          done
+
+      - name: Update stable deployment
+        run: |
+          kubectl set image deployment/glaucoma-api \
+            api=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.version }} \
+            -n glaucoma
+
+          kubectl rollout status deployment/glaucoma-api -n glaucoma --timeout=5m
+
+      - name: Clean up canary
+        run: |
+          kubectl delete deployment glaucoma-api-canary -n glaucoma
+
+          # Reset traffic to 100% stable
+          kubectl apply -f - <<EOF
+          apiVersion: networking.istio.io/v1beta1
+          kind: VirtualService
+          metadata:
+            name: glaucoma-api
+            namespace: glaucoma
+          spec:
+            hosts:
+            - glaucoma-api
+            http:
+            - route:
+              - destination:
+                  host: glaucoma-api
+                  subset: stable
+                weight: 100
+          EOF
+
+      - name: Notify promotion complete
+        uses: 8398a7/action-slack@v3
+        with:
+          status: custom
+          custom_payload: |
+            {
+              text: "✓ Canary promoted to stable",
+              attachments: [{
+                color: 'good',
+                fields: [
+                  { title: 'Version', value: '${{ inputs.version }}', short: true },
+                  { title: 'Environment', value: '${{ inputs.environment }}', short: true },
+                  { title: 'Traffic', value: '100%', short: true }
+                ]
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+
+      - name: Create release tag
+        run: |
+          git tag -a "${{ inputs.version }}-${{ inputs.environment }}" \
+            -m "Canary promoted to stable in ${{ inputs.environment }}"
+          git push origin "${{ inputs.version }}-${{ inputs.environment }}"

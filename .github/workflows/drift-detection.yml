@@ -1,0 +1,325 @@
+name: Infrastructure Drift Detection
+
+on:
+  schedule:
+    # Run every 6 hours
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'deploy/kubernetes/**'
+      - 'deploy/terraform/**'
+      - '.github/workflows/drift-detection.yml'
+
+env:
+  K8S_NAMESPACE: glaucoma
+
+jobs:
+  # Kubernetes drift detection
+  k8s-drift-detection:
+    name: Kubernetes Drift Detection
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure kubectl
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: Install drift detection tools
+        run: |
+          # Install kubediff
+          pip install kubediff
+
+          # Install kubectl-slice (for splitting manifests)
+          curl -Lo kubectl-slice.tar.gz https://github.com/patrickdappollonio/kubectl-slice/releases/latest/download/kubectl-slice_linux_x86_64.tar.gz
+          tar xzf kubectl-slice.tar.gz
+          chmod +x kubectl-slice
+          sudo mv kubectl-slice /usr/local/bin/
+
+      - name: Detect Kubernetes drift
+        id: k8s-drift
+        continue-on-error: true
+        run: |
+          echo "## Kubernetes Drift Detection Report" > drift-report.md
+          echo "" >> drift-report.md
+          echo "**Generated**: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> drift-report.md
+          echo "**Namespace**: ${{ env.K8S_NAMESPACE }}" >> drift-report.md
+          echo "" >> drift-report.md
+
+          # Check each manifest file
+          DRIFT_FOUND=false
+
+          for manifest in deploy/kubernetes/*.yaml; do
+            echo "Checking $manifest..."
+
+            # Compare with cluster state
+            DIFF_OUTPUT=$(kubectl diff -f "$manifest" -n ${{ env.K8S_NAMESPACE }} 2>&1 || true)
+
+            if [ -n "$DIFF_OUTPUT" ]; then
+              echo "### Drift detected in: $(basename $manifest)" >> drift-report.md
+              echo '```diff' >> drift-report.md
+              echo "$DIFF_OUTPUT" >> drift-report.md
+              echo '```' >> drift-report.md
+              echo "" >> drift-report.md
+              DRIFT_FOUND=true
+            fi
+          done
+
+          if [ "$DRIFT_FOUND" = true ]; then
+            echo "drift_detected=true" >> $GITHUB_OUTPUT
+            echo "❌ Drift detected!" >> drift-report.md
+          else
+            echo "drift_detected=false" >> $GITHUB_OUTPUT
+            echo "✅ No drift detected. Cluster matches expected state." >> drift-report.md
+          fi
+
+      - name: Check resource modifications
+        id: resource-check
+        run: |
+          echo "" >> drift-report.md
+          echo "## Resource Modification Check" >> drift-report.md
+          echo "" >> drift-report.md
+
+          # Get all resources in namespace
+          RESOURCES=$(kubectl api-resources --verbs=list --namespaced -o name | grep -v "events" | tr '\n' ',')
+
+          # Check for resources not in manifests
+          kubectl get $RESOURCES -n ${{ env.K8S_NAMESPACE }} -o json > cluster-state.json
+
+          # Compare annotations for tracking
+          echo "### Resources with manual modifications:" >> drift-report.md
+          echo '```' >> drift-report.md
+          kubectl get all -n ${{ env.K8S_NAMESPACE }} \
+            -o jsonpath='{range .items[*]}{.kind}/{.metadata.name}{"\t"}{.metadata.annotations.kubectl\.kubernetes\.io/last-applied-configuration}{"\n"}{end}' \
+            >> drift-report.md || true
+          echo '```' >> drift-report.md
+
+      - name: Check for orphaned resources
+        run: |
+          echo "" >> drift-report.md
+          echo "## Orphaned Resources" >> drift-report.md
+          echo "" >> drift-report.md
+          echo "Resources in cluster but not in IaC:" >> drift-report.md
+          echo "" >> drift-report.md
+
+          # Get all deployments
+          echo "### Deployments:" >> drift-report.md
+          echo '```' >> drift-report.md
+          kubectl get deployments -n ${{ env.K8S_NAMESPACE }} \
+            -o custom-columns=NAME:.metadata.name,MANAGED:.metadata.labels.managed-by \
+            | grep -v "kubectl\|helm\|flux" || echo "None" >> drift-report.md
+          echo '```' >> drift-report.md
+
+          # Get all services
+          echo "### Services:" >> drift-report.md
+          echo '```' >> drift-report.md
+          kubectl get services -n ${{ env.K8S_NAMESPACE }} \
+            -o custom-columns=NAME:.metadata.name,MANAGED:.metadata.labels.managed-by \
+            | grep -v "kubectl\|helm\|flux" || echo "None" >> drift-report.md
+          echo '```' >> drift-report.md
+
+      - name: Check ConfigMap/Secret drift
+        run: |
+          echo "" >> drift-report.md
+          echo "## Configuration Drift" >> drift-report.md
+          echo "" >> drift-report.md
+
+          # Compare ConfigMaps
+          echo "### ConfigMaps:" >> drift-report.md
+          for cm in $(kubectl get configmap -n ${{ env.K8S_NAMESPACE }} -o name); do
+            CM_NAME=$(echo $cm | cut -d'/' -f2)
+
+            # Check if exists in manifests
+            if ! grep -r "name: $CM_NAME" deploy/kubernetes/ > /dev/null 2>&1; then
+              echo "- ⚠️  $CM_NAME (not in IaC)" >> drift-report.md
+            fi
+          done
+
+          # Compare Secrets
+          echo "### Secrets:" >> drift-report.md
+          for secret in $(kubectl get secret -n ${{ env.K8S_NAMESPACE }} -o name | grep -v "default-token"); do
+            SECRET_NAME=$(echo $secret | cut -d'/' -f2)
+
+            # Check if exists in manifests
+            if ! grep -r "name: $SECRET_NAME" deploy/kubernetes/ > /dev/null 2>&1; then
+              echo "- ⚠️  $SECRET_NAME (not in IaC)" >> drift-report.md
+            fi
+          done
+
+      - name: Generate drift summary
+        id: summary
+        run: |
+          # Create summary
+          cat drift-report.md >> $GITHUB_STEP_SUMMARY
+
+          # Count drifts
+          DRIFT_COUNT=$(grep -c "Drift detected" drift-report.md || echo "0")
+          echo "drift_count=$DRIFT_COUNT" >> $GITHUB_OUTPUT
+
+      - name: Upload drift report
+        uses: actions/upload-artifact@v3
+        with:
+          name: drift-report
+          path: |
+            drift-report.md
+            cluster-state.json
+          retention-days: 90
+
+      - name: Create issue on drift
+        if: steps.k8s-drift.outputs.drift_detected == 'true'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const driftReport = fs.readFileSync('drift-report.md', 'utf8');
+
+            const issue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '🚨 Infrastructure Drift Detected',
+              body: `## Infrastructure Drift Alert\n\n${driftReport}\n\n---\n**Action Required**: Review and reconcile the drift.\n\n**Options**:\n1. Update manifests to match cluster state (if changes are intentional)\n2. Apply manifests to restore desired state (if changes are unauthorized)\n3. Document exceptions in drift-exceptions.yaml`,
+              labels: ['infrastructure', 'drift', 'needs-review']
+            });
+
+            console.log(`Created issue #${issue.data.number}`);
+
+      - name: Send notification
+        if: steps.k8s-drift.outputs.drift_detected == 'true'
+        uses: 8398a7/action-slack@v3
+        with:
+          status: custom
+          custom_payload: |
+            {
+              text: "🚨 Infrastructure Drift Detected",
+              attachments: [{
+                color: 'danger',
+                fields: [
+                  { title: 'Namespace', value: '${{ env.K8S_NAMESPACE }}', short: true },
+                  { title: 'Drift Count', value: '${{ steps.summary.outputs.drift_count }}', short: true },
+                  { title: 'Repository', value: '${{ github.repository }}', short: true },
+                  { title: 'Branch', value: '${{ github.ref_name }}', short: true }
+                ]
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+        continue-on-error: true
+
+  # Terraform drift detection (if using Terraform)
+  terraform-drift-detection:
+    name: Terraform Drift Detection
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.5.0
+
+      - name: Configure AWS credentials
+        if: hashFiles('deploy/terraform/**/*.tf') != ''
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+        continue-on-error: true
+
+      - name: Terraform Init
+        if: hashFiles('deploy/terraform/**/*.tf') != ''
+        working-directory: deploy/terraform
+        run: terraform init
+        continue-on-error: true
+
+      - name: Terraform Plan (Detect Drift)
+        if: hashFiles('deploy/terraform/**/*.tf') != ''
+        id: tf-plan
+        working-directory: deploy/terraform
+        run: |
+          terraform plan -detailed-exitcode -out=tfplan || echo "drift_detected=true" >> $GITHUB_OUTPUT
+        continue-on-error: true
+
+      - name: Show Terraform Changes
+        if: hashFiles('deploy/terraform/**/*.tf') != '' && steps.tf-plan.outputs.drift_detected == 'true'
+        working-directory: deploy/terraform
+        run: |
+          terraform show tfplan > terraform-drift.txt
+
+      - name: Upload Terraform drift report
+        if: hashFiles('deploy/terraform/**/*.tf') != ''
+        uses: actions/upload-artifact@v3
+        with:
+          name: terraform-drift
+          path: deploy/terraform/terraform-drift.txt
+          retention-days: 90
+        continue-on-error: true
+
+  # Docker image drift detection
+  docker-drift-detection:
+    name: Docker Image Drift Detection
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure kubectl
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: Check running vs expected images
+        run: |
+          echo "## Docker Image Drift" > image-drift.md
+          echo "" >> image-drift.md
+
+          # Get images from manifests
+          echo "### Expected Images (from manifests):" >> image-drift.md
+          echo '```' >> image-drift.md
+          grep -h "image:" deploy/kubernetes/*.yaml | sort -u >> image-drift.md
+          echo '```' >> image-drift.md
+
+          # Get running images
+          echo "" >> image-drift.md
+          echo "### Running Images (in cluster):" >> image-drift.md
+          echo '```' >> image-drift.md
+          kubectl get pods -n ${{ env.K8S_NAMESPACE }} \
+            -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[*].image}{"\n"}{end}' \
+            >> image-drift.md
+          echo '```' >> image-drift.md
+
+          # Compare
+          echo "" >> image-drift.md
+          echo "### Image Version Drift:" >> image-drift.md
+
+          # Check for tag mismatches
+          for pod in $(kubectl get pods -n ${{ env.K8S_NAMESPACE }} -o name); do
+            POD_NAME=$(echo $pod | cut -d'/' -f2)
+            RUNNING_IMAGE=$(kubectl get $pod -n ${{ env.K8S_NAMESPACE }} -o jsonpath='{.spec.containers[0].image}')
+
+            echo "- $POD_NAME: $RUNNING_IMAGE" >> image-drift.md
+          done
+
+          cat image-drift.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload image drift report
+        uses: actions/upload-artifact@v3
+        with:
+          name: image-drift-report
+          path: image-drift.md
+          retention-days: 30

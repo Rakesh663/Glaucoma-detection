@@ -1,0 +1,245 @@
+---
+# Canary Deployment Configuration using Flagger
+# This enables progressive traffic shifting with automated rollback
+
+apiVersion: flagger.app/v1beta1
+kind: Canary
+metadata:
+  name: glaucoma-api-canary
+  namespace: glaucoma
+spec:
+  # Deployment reference
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: glaucoma-api
+
+  # HPA reference (optional)
+  autoscalerRef:
+    apiVersion: autoscaling/v2
+    kind: HorizontalPodAutoscaler
+    name: glaucoma-api-hpa
+
+  # Service configuration
+  service:
+    port: 8000
+    targetPort: 8000
+    name: glaucoma-api
+    portDiscovery: true
+    # Traffic policy
+    trafficPolicy:
+      tls:
+        mode: DISABLE
+
+  # Canary analysis configuration
+  analysis:
+    # Schedule interval (default 1m)
+    interval: 30s
+
+    # Max number of failed metric checks before rollback
+    threshold: 5
+
+    # Max traffic percentage routed to canary
+    maxWeight: 50
+
+    # Canary increment step (percentage)
+    stepWeight: 10
+
+    # Promotion gate - manual or automatic
+    # stepWeightPromotion: 10
+
+    # Metrics for canary analysis
+    metrics:
+      # Request success rate
+      - name: request-success-rate
+        thresholdRange:
+          min: 99  # 99% success rate minimum
+        interval: 30s
+
+      # Request duration (p99)
+      - name: request-duration
+        thresholdRange:
+          max: 2000  # Max 2 seconds for p99
+        interval: 30s
+
+      # Custom metrics from Prometheus
+      - name: prediction-accuracy
+        thresholdRange:
+          min: 85  # Minimum 85% prediction confidence
+        interval: 1m
+        query: |
+          avg(
+            rate(predictions_total{result="positive"}[1m])
+          ) * 100
+
+    # Webhooks for notifications and gates
+    webhooks:
+      # Pre-rollout webhook (optional)
+      - name: pre-rollout-check
+        type: pre-rollout
+        url: http://glaucoma-api:8000/health
+        timeout: 30s
+        metadata:
+          type: bash
+          cmd: "curl -s http://glaucoma-api:8000/health | grep -q healthy"
+
+      # Rollout webhook for notifications
+      - name: rollout-notification
+        type: rollout
+        url: http://notification-service/canary-start
+        timeout: 5s
+        metadata:
+          environment: production
+          service: glaucoma-api
+
+      # Promotion gate (manual approval)
+      - name: promotion-gate
+        type: confirm-promotion
+        url: http://flagger-loadtester/gate/approve
+
+      # Post-rollout notification
+      - name: post-rollout-notification
+        type: post-rollout
+        url: http://notification-service/canary-complete
+        timeout: 5s
+
+---
+# Prometheus metrics for Flagger
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: flagger-prometheus-metrics
+  namespace: glaucoma
+data:
+  # Request success rate metric
+  request-success-rate: |
+    sum(
+      rate(
+        http_requests_total{
+          namespace="glaucoma",
+          deployment=~"glaucoma-api.*",
+          status_code!~"5.*"
+        }[1m]
+      )
+    )
+    /
+    sum(
+      rate(
+        http_requests_total{
+          namespace="glaucoma",
+          deployment=~"glaucoma-api.*"
+        }[1m]
+      )
+    ) * 100
+
+  # Request duration metric (p99)
+  request-duration: |
+    histogram_quantile(
+      0.99,
+      sum(
+        rate(
+          http_request_duration_seconds_bucket{
+            namespace="glaucoma",
+            deployment=~"glaucoma-api.*"
+          }[1m]
+        )
+      ) by (le)
+    ) * 1000
+
+---
+# Canary-specific Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: glaucoma-api-canary
+  namespace: glaucoma
+  labels:
+    app: glaucoma-api
+    role: canary
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8000
+      targetPort: 8000
+      protocol: TCP
+      name: http
+  selector:
+    app: glaucoma-api
+
+---
+# Primary Service (stable)
+apiVersion: v1
+kind: Service
+metadata:
+  name: glaucoma-api-primary
+  namespace: glaucoma
+  labels:
+    app: glaucoma-api
+    role: primary
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8000
+      targetPort: 8000
+      protocol: TCP
+      name: http
+  selector:
+    app: glaucoma-api
+
+---
+# Virtual Service for Istio (if using Istio)
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: glaucoma-api
+  namespace: glaucoma
+spec:
+  hosts:
+    - glaucoma-api.glaucoma.svc.cluster.local
+  http:
+    - match:
+        - headers:
+            x-canary:
+              exact: "true"
+      route:
+        - destination:
+            host: glaucoma-api-canary
+            port:
+              number: 8000
+    - route:
+        - destination:
+            host: glaucoma-api-primary
+            port:
+              number: 8000
+          weight: 100
+        - destination:
+            host: glaucoma-api-canary
+            port:
+              number: 8000
+          weight: 0
+
+---
+# Destination Rule for Istio
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: glaucoma-api
+  namespace: glaucoma
+spec:
+  host: glaucoma-api.glaucoma.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 100
+      http:
+        http1MaxPendingRequests: 50
+        http2MaxRequests: 100
+        maxRequestsPerConnection: 2
+    loadBalancer:
+      simple: LEAST_REQUEST
+    outlierDetection:
+      consecutiveErrors: 5
+      interval: 30s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+      minHealthPercent: 40

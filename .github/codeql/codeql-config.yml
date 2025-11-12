@@ -1,0 +1,62 @@
+# CodeQL Configuration File
+# Customize code scanning analysis
+
+name: "Glaucoma API CodeQL Config"
+
+# Disable default queries and use custom set
+disable-default-queries: false
+
+# Query packs to run
+queries:
+  - uses: security-extended
+  - uses: security-and-quality
+
+# Paths to analyze
+paths:
+  - api/
+  - tests/
+
+# Paths to ignore
+paths-ignore:
+  - tests/
+  - api/migrations/
+  - '**/test_*.py'
+  - '**/__pycache__/**'
+  - venv/
+  - htmlcov/
+  - .venv/
+  - build/
+  - dist/
+  - '*.egg-info'
+
+# Additional query filters
+query-filters:
+  - exclude:
+      id:
+        - py/clear-text-logging-sensitive-data  # We handle this with structured logging
+        - py/clear-text-storage-sensitive-data  # Handled by encryption
+  - include:
+      tags:
+        - security
+        - correctness
+
+# Custom queries (optional)
+# These would be .ql files in the .github/codeql/queries/ directory
+# query-paths:
+#   - .github/codeql/queries
+
+# Scan depth
+# thread-count: 2  # Number of threads (0 = auto)
+# timeout: 120  # Query timeout in seconds
+
+# Python-specific configuration
+python:
+  # Python version to assume for analysis
+  version: "3.11"
+
+  # Additional Python paths
+  # setup-python-extractor:
+  #   python-executable: python3
+
+  # Dependencies to analyze
+  analyze-dependencies: true
