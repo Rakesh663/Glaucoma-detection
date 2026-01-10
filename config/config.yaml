@@ -1,4 +1,5 @@
-# Glaucoma Detection Configuration - Optimized for ACRIMA
+# Glaucoma Detection Configuration - Clinical Grade
+# Optimized for ACRIMA dataset with robust preprocessing
 
 # Data paths
 data:
@@ -6,46 +7,107 @@ data:
   val_dir: "data/val"
   test_dir: "data/test"
   image_size: 512
-  num_workers: 4
+  num_workers: 0  # Set to 0 for Windows compatibility, increase on Linux
 
-# Model configuration
+# Clinical Preprocessing (NEW)
+preprocessing:
+  enabled: true
+  apply_clahe: true
+  clahe_clip_limit: 3.0
+  enhance_green_channel: true
+  crop_to_roi: true
+  illumination_correction: true
+  vessel_enhancement: false  # Expensive, enable if needed
+
+# Normalization (Changed to fundus-specific)
+normalization:
+  type: "fundus"  # "fundus" or "imagenet"
+  fundus_mean: [0.485, 0.285, 0.156]
+  fundus_std: [0.229, 0.184, 0.134]
+
+# Model configuration (Enhanced)
 model:
   architecture: "efficientnet_b0"
   num_classes: 1
   pretrained: true
   dropout: 0.4
+  use_attention: true
+  mc_dropout: true  # Monte Carlo dropout for uncertainty
+  # Ensemble settings (optional, increases training time)
+  use_ensemble: false
+  backbones: ["efficientnet_b0", "resnet50"]
 
-# Training parameters
+# Training parameters (Optimized for faster training)
 training:
-  batch_size: 16
-  num_epochs: 100
-  learning_rate: 0.0003
+  batch_size: 32  # Increased from 16 for faster training
+  num_epochs: 50  # Reduced from 150 (early stopping handles it)
+  learning_rate: 0.0003  # Slightly higher for faster convergence
   weight_decay: 0.0001
   scheduler: "cosine"
-  early_stopping_patience: 15
+  warmup_epochs: 3  # Reduced warmup
+  early_stopping_patience: 15  # Stop earlier if no improvement
   gradient_clip: 1.0
+  gradient_accumulation: 1  # No accumulation for speed
+  label_smoothing: 0.1
 
-# Data augmentation - Aggressive for better generalization
+# Heavy Augmentation for Small Dataset (NEW)
 augmentation:
+  # Geometric
   horizontal_flip: 0.5
   vertical_flip: 0.5
-  rotation_limit: 20
+  rotation_limit: 30
+  affine_scale: [0.9, 1.1]
+  
+  # Color/Intensity
   brightness_limit: 0.3
   contrast_limit: 0.3
-  blur_limit: 5
-  normalize:
-    mean: [0.485, 0.456, 0.406]
-    std: [0.229, 0.224, 0.225]
+  hue_shift_limit: 10
+  saturation_limit: 20
+  
+  # Blur/Noise
+  blur_limit: 7
+  noise_var_limit: [10, 50]
+  
+  # Dropout augmentation
+  coarse_dropout_holes: 8
+  coarse_dropout_size: 32
+  
+  # MixUp/CutMix (Critical for small datasets)
+  mixup_alpha: 0.4
+  cutmix_alpha: 1.0
+  mixup_prob: 0.3
+  cutmix_prob: 0.3
+  
+  # Camera simulation
+  camera_simulation: true
+  lighting_variation: true
 
-# Loss and metrics
+# Loss function
 loss:
-  type: "bce"
+  type: "bce"  # "bce" or "focal"
   focal_gamma: 2.0
+  label_smoothing: 0.1
 
 # Evaluation
 evaluation:
   threshold: 0.5
   target_specificity: 0.95
+
+# Inference settings
+inference:
+  use_tta: true
+  tta_augments: 3  # Reduced from 5 for faster inference
+  use_mc_dropout: true
+  mc_samples: 5  # Reduced from 10 for faster inference
+  uncertainty_threshold: 0.15
+  generate_explanations: true
+
+# Quality assessment (NEW)
+quality:
+  enabled: true
+  min_quality_score: 0.5
+  blur_threshold: 100
+  exposure_range: [30, 225]
 
 # CPU optimization
 cpu:
@@ -59,7 +121,7 @@ api:
   host: "0.0.0.0"
   port: 8000
   workers: 1
-  
+
 # Logging
 logging:
   level: "INFO"

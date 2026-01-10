@@ -98,7 +98,7 @@ services:
       - ./models:/app/models:ro
       - api_logs:/app/logs
     ports:
-      - "${API_PORT:-8000}:8000"
+      - "${API_PORT:-8001}:8000"
     networks:
       - glaucoma-network
     depends_on:
@@ -130,7 +130,7 @@ services:
       - '--web.console.libraries=/usr/share/prometheus/console_libraries'
       - '--web.console.templates=/usr/share/prometheus/consoles'
     ports:
-      - "${PROMETHEUS_PORT:-9090}:9090"
+      - "${PROMETHEUS_PORT:-9091}:9090"
     networks:
       - glaucoma-network
     depends_on:
@@ -153,7 +153,7 @@ services:
       - ./deploy/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
       - ./deploy/grafana/datasources:/etc/grafana/provisioning/datasources:ro
     ports:
-      - "${GRAFANA_PORT:-3000}:3000"
+      - "${GRAFANA_PORT:-3001}:3000"
     networks:
       - glaucoma-network
     depends_on:

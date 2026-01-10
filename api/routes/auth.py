@@ -10,7 +10,7 @@ from passlib.context import CryptContext
 from datetime import datetime
 
 from ..database.session import get_db
-from ..database.models import User, Tenant
+from ..database.models import User, Tenant, Role
 from ..auth.jwt import create_access_token, create_refresh_token, refresh_access_token, get_current_active_user
 from ..utils.logging_config import logger
 
@@ -50,6 +50,7 @@ class RegisterRequest(BaseModel):
     first_name: str
     last_name: str
     tenant_id: str = "default"
+    role: str = "viewer"  # Default role if not specified
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -140,7 +141,7 @@ async def login(
         user_id=user.id,
         tenant_id=user.tenant_id,
         email=user.email,
-        role=user.role.name if user.role else "no_role"
+        role=user.role.name if user.role else "viewer"
     )
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
@@ -185,6 +186,15 @@ async def register(
             detail="Tenant is inactive"
         )
 
+    # Look up role by name
+    role = db.query(Role).filter(Role.name == request.role).first()
+
+    if not role:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Role '{request.role}' not found"
+        )
+
     # Create new user
     hashed_password = get_password_hash(request.password)
 
@@ -195,6 +205,7 @@ async def register(
         first_name=request.first_name,
         last_name=request.last_name,
         tenant_id=tenant.id,
+        role_id=role.id,  # Assign role_id
         is_active=True,
         is_verified=False,  # Require email verification
         is_superuser=False
@@ -204,12 +215,12 @@ async def register(
     db.commit()
     db.refresh(new_user)
 
-    # Create tokens
+    # Create tokens (use the role object we already queried)
     access_token = create_access_token(
         user_id=new_user.id,
         tenant_id=new_user.tenant_id,
         email=new_user.email,
-        role=new_user.role.name if new_user.role else None
+        role=role.name  # Use the role object we queried earlier
     )
 
     refresh_token_str = create_refresh_token(
@@ -217,7 +228,7 @@ async def register(
         tenant_id=new_user.tenant_id
     )
 
-    logger.info(f"New user registered: {new_user.email}")
+    logger.info(f"New user registered: {new_user.email} with role: {role.name}")
 
     return TokenResponse(
         access_token=access_token,
@@ -225,7 +236,7 @@ async def register(
         user_id=new_user.id,
         tenant_id=new_user.tenant_id,
         email=new_user.email,
-        role=new_user.role.name if new_user.role else "no_role"
+        role=role.name  # Use the role object we queried earlier
     )
 
 @router.post("/refresh", response_model=TokenResponse)
