@@ -65,6 +65,11 @@ class MetricsCalculator:
     def compute(self, threshold=0.5):
         probs = np.array(self.probabilities)
         labels = np.array(self.labels)
+        
+        # Handle MixUp labels - round to binary (0 or 1)
+        # MixUp creates fractional labels like 0.3, 0.7 etc
+        labels = np.round(labels).astype(int)
+        
         preds = (probs >= threshold).astype(int)
         
         accuracy = accuracy_score(labels, preds)

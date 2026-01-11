@@ -429,6 +429,11 @@ def train(config, resume_from=None):
             save_checkpoint(model, optimizer, epoch + 1, val_metrics, save_path)
             print(f"💾 New best model! {config['checkpoint']['monitor']}: {current_metric:.4f}")
         
+        # Always save last checkpoint (for resume if crash)
+        last_path = os.path.join(config['checkpoint']['save_dir'], 'last_checkpoint.pth')
+        save_checkpoint(model, optimizer, epoch + 1, val_metrics, last_path)
+        print(f"💾 Checkpoint saved: epoch {epoch + 1}")
+        
         # Early stopping
         if early_stopping(current_metric):
             if early_stopping.early_stop:
