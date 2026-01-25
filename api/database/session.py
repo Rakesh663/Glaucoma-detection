@@ -1,12 +1,13 @@
 """
 Database session configuration with connection pooling
+Supports Azure PostgreSQL with SSL
 """
 import os
 from typing import Generator
 from sqlalchemy import create_engine, event
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.pool import QueuePool
+from sqlalchemy.pool import QueuePool, NullPool
 import logging
 
 logger = logging.getLogger(__name__)
@@ -16,20 +17,32 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 # Get database URL from environment
+# Supports both local PostgreSQL and Azure PostgreSQL with SSL
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://glaucoma_user:glaucoma_pass@localhost:6432/glaucoma_db"
+    "postgresql+psycopg2://hrms_admin:Iscs10-5114@iscs-hrms-postgre-server.postgres.database.azure.com:5432/glaucoma?sslmode=require"
 )
 
+# SSL Certificate path for Azure PostgreSQL (optional)
+SSL_CERT_PATH = os.getenv("SSL_CERT_PATH", "")
+
 # Connection pool settings
-POOL_SIZE = int(os.getenv("DATABASE_POOL_SIZE", "20"))
-MAX_OVERFLOW = int(os.getenv("DATABASE_MAX_OVERFLOW", "10"))
+POOL_SIZE = int(os.getenv("DATABASE_POOL_SIZE", "10"))
+MAX_OVERFLOW = int(os.getenv("DATABASE_MAX_OVERFLOW", "5"))
 POOL_TIMEOUT = int(os.getenv("DATABASE_POOL_TIMEOUT", "30"))
-POOL_RECYCLE = int(os.getenv("DATABASE_POOL_RECYCLE", "3600"))
+POOL_RECYCLE = int(os.getenv("DATABASE_POOL_RECYCLE", "1800"))
 
 # ============================================================================
 # SQLAlchemy Engine with Connection Pooling
 # ============================================================================
+
+# Build connection args for SSL if needed
+connect_args = {}
+if "azure" in DATABASE_URL.lower() or "sslmode=require" in DATABASE_URL.lower():
+    connect_args["sslmode"] = "require"
+    if SSL_CERT_PATH and os.path.exists(SSL_CERT_PATH):
+        connect_args["sslrootcert"] = SSL_CERT_PATH
+        logger.info(f"Using SSL certificate: {SSL_CERT_PATH}")
 
 engine = create_engine(
     DATABASE_URL,
@@ -40,7 +53,7 @@ engine = create_engine(
     pool_recycle=POOL_RECYCLE,
     pool_pre_ping=True,  # Verify connections before using them
     echo=os.getenv("DATABASE_ECHO", "false").lower() == "true",
-    future=True
+    connect_args=connect_args
 )
 
 # Event listener for connection checkout (for debugging)

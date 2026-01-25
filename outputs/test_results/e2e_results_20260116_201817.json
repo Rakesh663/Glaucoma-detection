@@ -1,0 +1,116 @@
+{
+  "timestamp": "2026-01-16T20:18:17.545451",
+  "base_url": "http://localhost:8000",
+  "summary": {
+    "passed": 21,
+    "failed": 0,
+    "skipped": 0
+  },
+  "results": [
+    {
+      "name": "GET /",
+      "status": "PASS",
+      "message": "Status: 200"
+    },
+    {
+      "name": "GET /health",
+      "status": "PASS",
+      "message": "Model loaded: True"
+    },
+    {
+      "name": "GET /metrics",
+      "status": "PASS",
+      "message": "Prometheus metrics available"
+    },
+    {
+      "name": "POST /api/v1/auth/register (new user)",
+      "status": "PASS",
+      "message": "Status: 201"
+    },
+    {
+      "name": "POST /api/v1/auth/login (admin)",
+      "status": "PASS",
+      "message": "Logged in as admin"
+    },
+    {
+      "name": "GET /api/v1/auth/me",
+      "status": "PASS",
+      "message": "User: admin, Role: admin"
+    },
+    {
+      "name": "GET /api/v1/patients (no auth)",
+      "status": "PASS",
+      "message": "Correctly rejected: 401"
+    },
+    {
+      "name": "POST /api/v1/patients",
+      "status": "PASS",
+      "message": "Created patient: b350af54-b0c5-4cbe-be6a-825475bff141"
+    },
+    {
+      "name": "GET /api/v1/patients",
+      "status": "PASS",
+      "message": "Found 5 patients"
+    },
+    {
+      "name": "POST /predict",
+      "status": "PASS",
+      "message": "Label: glaucoma, Confidence: 0.73"
+    },
+    {
+      "name": "POST /batch-predict",
+      "status": "PASS",
+      "message": "Processed: 2, Success: 2"
+    },
+    {
+      "name": "POST /predict-with-explanation",
+      "status": "PASS",
+      "message": "Label: glaucoma, Heatmap: True, Overlay: True"
+    },
+    {
+      "name": "Save heatmap",
+      "status": "PASS",
+      "message": "Saved to outputs\\heatmaps\\heatmap_20260116_201756.png"
+    },
+    {
+      "name": "Save overlay",
+      "status": "PASS",
+      "message": "Saved to outputs\\heatmaps\\overlay_20260116_201756.png"
+    },
+    {
+      "name": "GET /admin/verification-stats",
+      "status": "PASS",
+      "message": "Pending: 1, Glaucoma: 0, Normal: 0"
+    },
+    {
+      "name": "GET /admin/pending-images",
+      "status": "PASS",
+      "message": "Found 1 pending images"
+    },
+    {
+      "name": "POST /admin/label-image",
+      "status": "PASS",
+      "message": "Labeled as glaucoma, moved to: C:\\Users\\DELL\\Desktop\\glaucoma\\data\\verified\\glaucoma"
+    },
+    {
+      "name": "POST /admin/merge-to-training",
+      "status": "PASS",
+      "message": "Merged 1 images (Glaucoma: 1, Normal: 0)"
+    },
+    {
+      "name": "Verified images in training",
+      "status": "PASS",
+      "message": "Found 1 verified images in data/train/"
+    },
+    {
+      "name": "GET /docs (Swagger UI)",
+      "status": "PASS",
+      "message": "Available"
+    },
+    {
+      "name": "GET /openapi.json",
+      "status": "PASS",
+      "message": "20 endpoints documented"
+    }
+  ]
+}

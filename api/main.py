@@ -42,6 +42,7 @@ from api.auth.jwt import get_current_active_user
 from api.auth.rbac import RequirePermission
 from api.routes import auth as auth_router
 from api.routes import patients as patients_router
+from api.routes import admin_verification as admin_router
 
 
 class PredictionResponse(BaseModel):
@@ -55,6 +56,41 @@ class PredictionResponse(BaseModel):
     processing_time_ms: float
     timestamp: str
     cached: bool = False
+
+
+class ExplainabilityResponse(BaseModel):
+    """Response model for predictions with Grad-CAM explainability."""
+    status: str
+    prediction: int
+    label: str
+    probability: float
+    confidence: float
+    risk_level: str
+    recommendations: list
+    processing_time_ms: float
+    timestamp: str
+    heatmap_base64: Optional[str] = None  # Base64-encoded Grad-CAM heatmap PNG
+    overlay_base64: Optional[str] = None  # Base64-encoded overlay PNG
+    uncertainty: Optional[float] = None
+    quality_score: Optional[float] = None
+
+
+def numpy_to_base64_png(arr) -> str:
+    """Convert numpy array to base64-encoded PNG string."""
+    import base64
+    import cv2
+    
+    # Ensure array is uint8
+    if arr.dtype != 'uint8':
+        arr = (arr * 255).astype('uint8')
+    
+    # Encode as PNG
+    success, buffer = cv2.imencode('.png', cv2.cvtColor(arr, cv2.COLOR_RGB2BGR))
+    if not success:
+        return None
+    
+    # Convert to base64
+    return base64.b64encode(buffer).decode('utf-8')
 
 
 class HealthResponse(BaseModel):
@@ -87,6 +123,7 @@ app.add_middleware(RateLimitMiddleware, enable_per_ip=True)
 # Include routers
 app.include_router(auth_router.router)
 app.include_router(patients_router.router)
+app.include_router(admin_router.router)
 
 detector = None
 app_start_time = None
@@ -187,8 +224,9 @@ async def root():
         "endpoints": {
             "GET /": "API information",
             "GET /health": "Health check",
-            "POST /predict": "Single image prediction",
-            "POST /batch-predict": "Batch prediction",
+            "POST /predict": "Single image prediction (requires auth)",
+            "POST /predict-with-explanation": "Prediction with Grad-CAM heatmap",
+            "POST /batch-predict": "Batch prediction (requires auth)",
             "GET /docs": "API documentation"
         },
         "model_status": "loaded" if detector is not None else "not loaded"
@@ -239,13 +277,13 @@ async def load_image_from_upload(file: UploadFile) -> Image.Image:
         )
 
 
-async def run_inference_async(image: Image.Image, return_confidence: bool = True) -> dict:
+async def run_inference_async(image: Image.Image, return_explanation: bool = True) -> dict:
     """
     Run CPU-intensive inference in thread pool to avoid blocking event loop
 
     Args:
         image: PIL Image to analyze
-        return_confidence: Whether to return confidence scores
+        return_explanation: Whether to return Grad-CAM explanations
 
     Returns:
         Prediction result dictionary
@@ -262,33 +300,36 @@ async def run_inference_async(image: Image.Image, return_confidence: bool = True
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(
         executor,
-        partial(detector.predict, image, return_confidence=return_confidence)
+        partial(detector.predict, image, return_explanation=return_explanation)
     )
 
+    # Convert PredictionResult to dict for API response
+    if hasattr(result, 'to_dict'):
+        return result.to_dict()
     return result
 
 
-async def get_recommendations_async(result: dict) -> list:
+async def get_recommendations_async(result) -> list:
     """
-    Get recommendations in thread pool (if computationally intensive)
+    Get recommendations from prediction result.
+    The PredictionResult already contains recommendations generated during prediction.
 
     Args:
-        result: Prediction result
+        result: Prediction result (PredictionResult or dict)
 
     Returns:
         List of recommendations
     """
-    global executor, detector
-
-    # Run in executor (even though it's typically lightweight,
-    # this ensures consistency and allows for future expansion)
-    loop = asyncio.get_event_loop()
-    recommendations = await loop.run_in_executor(
-        executor,
-        partial(detector.get_recommendations, result)
-    )
-
-    return recommendations
+    # If result is a PredictionResult object with recommendations attribute
+    if hasattr(result, 'recommendations'):
+        return result.recommendations or []
+    
+    # If result is a dict (already converted)
+    if isinstance(result, dict) and 'recommendations' in result:
+        return result.get('recommendations', [])
+    
+    # Default empty recommendations
+    return []
 
 
 @app.post("/predict", response_model=PredictionResponse)
@@ -354,7 +395,7 @@ async def predict(
         image = await load_image_from_upload(file)
 
         # Run inference asynchronously in thread pool
-        result = await run_inference_async(image, return_confidence=True)
+        result = await run_inference_async(image, return_explanation=False)
         recommendations = await get_recommendations_async(result)
 
         processing_time = (time.time() - start_time) * 1000
@@ -386,6 +427,42 @@ async def predict(
             "risk_level": result['risk_level'],
             "recommendations": recommendations,
         }
+
+        # Auto-save image for future retraining (built-in feature)
+        try:
+            import json
+            from pathlib import Path
+            incoming_dir = Path("data/incoming")
+            incoming_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Create filename with timestamp and prediction
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            safe_filename = f"{timestamp}_{result['label']}_{image_hash[:8]}.jpg"
+            image_path = incoming_dir / safe_filename
+            
+            # Save image
+            if image_bytes:
+                with open(image_path, 'wb') as f:
+                    f.write(image_bytes)
+            
+            # Save metadata alongside
+            metadata = {
+                "filename": safe_filename,
+                "original_filename": file.filename,
+                "prediction": result['label'],
+                "probability": result['probability'],
+                "confidence": result['confidence'],
+                "timestamp": datetime.now().isoformat(),
+                "patient_id": patient_id,
+                "image_hash": image_hash
+            }
+            meta_path = incoming_dir / f"{timestamp}_{result['label']}_{image_hash[:8]}.json"
+            with open(meta_path, 'w') as f:
+                json.dump(metadata, f, indent=2)
+                
+            logger.info(f"Image saved for future retraining: {safe_filename}")
+        except Exception as e:
+            logger.warning(f"Failed to save image for retraining: {e}")
 
         # Save prediction to database
         db_prediction = Prediction(
@@ -442,6 +519,114 @@ async def predict(
             detail=f"Prediction failed: {str(e)}"
         )
 
+
+@app.post("/predict-with-explanation", response_model=ExplainabilityResponse)
+async def predict_with_explanation(
+    file: UploadFile = File(...),
+):
+    """
+    Predict glaucoma with Grad-CAM visual explanation.
+    
+    Returns prediction along with:
+    - heatmap_base64: Grad-CAM heatmap showing model attention areas
+    - overlay_base64: Original image with heatmap overlay
+    
+    This endpoint is for explainability testing and does not require authentication
+    or patient_id. For production use with patient records, use /predict instead.
+    """
+    
+    if detector is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Model not loaded. Train first: cd src && python train.py"
+        )
+    
+    validate_image(file)
+    start_time = time.time()
+    
+    try:
+        # Load image
+        image = await load_image_from_upload(file)
+        
+        # Run inference with explanation in thread pool
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            executor,
+            partial(detector.predict, image, return_explanation=True)
+        )
+        
+        # Recommendations are already included in PredictionResult
+        recommendations = getattr(result, 'recommendations', []) if hasattr(result, 'recommendations') else []
+        
+        processing_time = (time.time() - start_time) * 1000
+        
+        # Convert heatmap/overlay to base64 if available
+        heatmap_base64 = None
+        overlay_base64 = None
+        
+        if hasattr(result, 'attention_map') and result.attention_map is not None:
+            # Convert heatmap to colormap
+            import cv2
+            import numpy as np
+            heatmap = result.attention_map
+            if heatmap.ndim == 2:
+                heatmap_colored = cv2.applyColorMap(
+                    np.uint8(255 * heatmap), cv2.COLORMAP_JET
+                )
+                heatmap_colored = cv2.cvtColor(heatmap_colored, cv2.COLOR_BGR2RGB)
+                heatmap_base64 = numpy_to_base64_png(heatmap_colored)
+        
+        if hasattr(result, 'gradcam_overlay') and result.gradcam_overlay is not None:
+            overlay_base64 = numpy_to_base64_png(result.gradcam_overlay)
+        
+        # Handle both dict and PredictionResult object
+        if hasattr(result, 'prediction'):
+            pred_data = {
+                'prediction': result.prediction,
+                'label': result.label,
+                'probability': result.probability,
+                'confidence': result.confidence,
+                'risk_level': result.risk_level,
+                'uncertainty': getattr(result, 'uncertainty', None),
+                'quality_score': getattr(result, 'quality_score', None),
+            }
+        else:
+            pred_data = result
+        
+        logger.info(
+            f"Explainability prediction completed",
+            extra={
+                "label": pred_data.get('label') or pred_data.label,
+                "has_heatmap": heatmap_base64 is not None,
+                "has_overlay": overlay_base64 is not None,
+                "processing_time_ms": processing_time
+            }
+        )
+        
+        return ExplainabilityResponse(
+            status="success",
+            prediction=pred_data.get('prediction') if isinstance(pred_data, dict) else pred_data.prediction,
+            label=pred_data.get('label') if isinstance(pred_data, dict) else pred_data.label,
+            probability=pred_data.get('probability') if isinstance(pred_data, dict) else pred_data.probability,
+            confidence=pred_data.get('confidence') if isinstance(pred_data, dict) else pred_data.confidence,
+            risk_level=pred_data.get('risk_level') if isinstance(pred_data, dict) else pred_data.risk_level,
+            recommendations=recommendations if isinstance(recommendations, list) else [],
+            processing_time_ms=round(processing_time, 2),
+            timestamp=datetime.now().isoformat(),
+            heatmap_base64=heatmap_base64,
+            overlay_base64=overlay_base64,
+            uncertainty=pred_data.get('uncertainty') if isinstance(pred_data, dict) else getattr(pred_data, 'uncertainty', None),
+            quality_score=pred_data.get('quality_score') if isinstance(pred_data, dict) else getattr(pred_data, 'quality_score', None),
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Explainability prediction failed: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Prediction with explanation failed: {str(e)}"
+        )
 
 @app.post("/batch-predict")
 async def batch_predict(
@@ -518,7 +703,7 @@ async def batch_predict(
                 image = await load_image_from_upload(file)
 
                 # Run inference asynchronously in thread pool
-                result = await run_inference_async(image, return_confidence=True)
+                result = await run_inference_async(image, return_explanation=False)
                 recommendations = await get_recommendations_async(result)
 
                 prediction_data = {

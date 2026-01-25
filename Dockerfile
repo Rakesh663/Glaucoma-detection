@@ -1,31 +1,8 @@
 # ============================================================================
-# Multi-Stage Dockerfile for Glaucoma Detection API
-# Production-grade with security best practices
+# Optimized Dockerfile for Glaucoma Detection API
+# Uses pre-built wheels from PyPI for faster builds
 # ============================================================================
 
-# ============================================================================
-# Stage 1: Builder - Install dependencies and compile wheels
-# ============================================================================
-FROM python:3.10-slim as builder
-
-WORKDIR /build
-
-# Install build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    g++ \
-    make \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements and install to wheels directory
-COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip wheel && \
-    pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
-
-# ============================================================================
-# Stage 2: Runtime - Minimal production image
-# ============================================================================
 FROM python:3.10-slim
 
 # Set environment variables
@@ -58,9 +35,10 @@ RUN groupadd -g ${APP_GID} ${APP_USER} && \
     mkdir -p ${APP_HOME}/models ${APP_HOME}/logs ${APP_HOME}/data && \
     chown -R ${APP_USER}:${APP_USER} ${APP_HOME}
 
-# Copy wheels from builder and install
-COPY --from=builder /wheels /wheels
-RUN pip install --no-cache-dir /wheels/* && rm -rf /wheels
+# Install Python dependencies directly (uses pre-built wheels from PyPI)
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY --chown=${APP_USER}:${APP_USER} api/ ${APP_HOME}/api/
@@ -68,8 +46,9 @@ COPY --chown=${APP_USER}:${APP_USER} src/ ${APP_HOME}/src/
 COPY --chown=${APP_USER}:${APP_USER} config/ ${APP_HOME}/config/
 COPY --chown=${APP_USER}:${APP_USER} alembic/ ${APP_HOME}/alembic/
 COPY --chown=${APP_USER}:${APP_USER} alembic.ini ${APP_HOME}/alembic.ini
-COPY --chown=${APP_USER}:${APP_USER} models/best_model.pth ${APP_HOME}/models/
-COPY --chown=${APP_USER}:${APP_USER} models/config.yaml ${APP_HOME}/models/
+
+# Copy model files if they exist (optional)
+COPY --chown=${APP_USER}:${APP_USER} models/ ${APP_HOME}/models/
 
 # Switch to non-root user
 USER ${APP_USER}
@@ -78,7 +57,7 @@ USER ${APP_USER}
 EXPOSE 8000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Run the application

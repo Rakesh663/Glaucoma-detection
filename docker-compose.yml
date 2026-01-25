@@ -62,14 +62,17 @@ services:
       dockerfile: Dockerfile
     container_name: glaucoma-api
     environment:
-      # Database
-      DATABASE_URL: postgresql://${POSTGRES_USER:-glaucoma_user}:${POSTGRES_PASSWORD:-glaucoma_pass_changeme}@postgres:5432/${POSTGRES_DB:-glaucoma_db}
-      DATABASE_POOL_SIZE: 20
-      DATABASE_MAX_OVERFLOW: 10
+      # Azure PostgreSQL Database
+      DATABASE_URL: postgresql+psycopg2://${PGUSER:-hrms_admin}:${PGPASSWORD:-Iscs10-5114}@${PGHOST:-iscs-hrms-postgre-server.postgres.database.azure.com}:${PGPORT:-5432}/${PGDATABASE:-glaucoma}?sslmode=require
+      DATABASE_POOL_SIZE: 10
+      DATABASE_MAX_OVERFLOW: 5
       DATABASE_POOL_PRE_PING: "true"
-      # Redis
+      # Redis (local container for caching)
       REDIS_URL: redis://:${REDIS_PASSWORD:-redis_pass_changeme}@redis:6379/0
       REDIS_CACHE_TTL: 3600
+      # Azure Blob Storage
+      AZURE_STORAGE_CONNECTION_STRING: ${AZURE_STORAGE_CONNECTION_STRING:-}
+      AZURE_STORAGE_CONTAINER_NAME: ${AZURE_STORAGE_CONTAINER_NAME:-glaucoma_data}
       # Security
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change_this_super_secret_key_in_production}
       JWT_ALGORITHM: HS256
@@ -96,14 +99,13 @@ services:
       ENABLE_TRACING: "true"
     volumes:
       - ./models:/app/models:ro
+      - ./data:/app/data
       - api_logs:/app/logs
     ports:
-      - "${API_PORT:-8001}:8000"
+      - "${API_PORT:-8000}:8000"
     networks:
       - glaucoma-network
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
@@ -111,7 +113,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 60s
     restart: unless-stopped
 
   # ==========================================================================

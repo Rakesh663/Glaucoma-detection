@@ -358,14 +358,50 @@ def train(config, resume_from=None):
     gradient_accumulation = config['training'].get('gradient_accumulation', 1)
     max_grad_norm = config['training'].get('gradient_clip', 1.0)
     
+    # Resume from checkpoint if specified
+    start_epoch = 0
+    best_metric = -float('inf') if config['checkpoint']['mode'] == 'max' else float('inf')
+    
+    if resume_from is not None:
+        if os.path.exists(resume_from):
+            print(f"\n🔄 Resuming from checkpoint: {resume_from}")
+            checkpoint = torch.load(resume_from, map_location=device, weights_only=False)
+            
+            # Restore model weights
+            model.load_state_dict(checkpoint['model_state_dict'])
+            print(f"   ✅ Model weights restored")
+            
+            # Restore optimizer state
+            if 'optimizer_state_dict' in checkpoint:
+                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                print(f"   ✅ Optimizer state restored")
+            
+            # Restore epoch
+            if 'epoch' in checkpoint:
+                start_epoch = checkpoint['epoch']
+                # Update scheduler to correct position
+                for _ in range(start_epoch):
+                    scheduler.step()
+                print(f"   ✅ Resuming from epoch {start_epoch + 1}")
+            
+            # Restore best metric
+            if 'metrics' in checkpoint:
+                monitor_key = config['checkpoint']['monitor'].replace('val_', '')
+                if monitor_key in checkpoint['metrics']:
+                    best_metric = checkpoint['metrics'][monitor_key]
+                    print(f"   ✅ Best {config['checkpoint']['monitor']}: {best_metric:.4f}")
+            
+            print(f"   ✅ Resume complete!\n")
+        else:
+            print(f"\n⚠️ Checkpoint not found: {resume_from}")
+            print(f"   Starting from scratch...\n")
+    
     # Training loop
     print("\n" + "=" * 70)
     print("🚀 TRAINING START")
     print("=" * 70)
     
-    best_metric = -float('inf') if config['checkpoint']['mode'] == 'max' else float('inf')
-    
-    for epoch in range(config['training']['num_epochs']):
+    for epoch in range(start_epoch, config['training']['num_epochs']):
         epoch_start = datetime.now()
         
         print(f"\n{'=' * 70}")

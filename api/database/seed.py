@@ -42,6 +42,9 @@ DEFAULT_PERMISSIONS = [
     # Audit log permissions
     {"name": "audit:read", "resource": "audit", "action": "read", "description": "View audit logs"},
 
+    # Admin verification permissions (HITL workflow)
+    {"name": "admin:verify", "resource": "admin", "action": "verify", "description": "Verify and label AI predictions for retraining"},
+
     # System permissions
     {"name": "system:admin", "resource": "system", "action": "admin", "description": "Full system administration"},
 ]
@@ -60,6 +63,7 @@ DEFAULT_ROLES = {
             "user:create", "user:read", "user:update", "user:delete",
             "role:create", "role:read", "role:update", "role:delete",
             "audit:read",
+            "admin:verify",
             "system:admin"
         ]
     },
@@ -67,9 +71,11 @@ DEFAULT_ROLES = {
         "description": "Medical doctor with full clinical access",
         "is_system_role": True,
         "permissions": [
-            "patient:create", "patient:read", "patient:update",
-            "prediction:create", "prediction:read", "prediction:review",
-            "user:read"
+            "patient:create", "patient:read", "patient:update", "patient:delete",
+            "prediction:create", "prediction:read", "prediction:update", "prediction:delete", "prediction:review",
+            "user:read",
+            "audit:read",
+            "admin:verify"
         ]
     },
     "radiologist": {
@@ -77,7 +83,8 @@ DEFAULT_ROLES = {
         "is_system_role": True,
         "permissions": [
             "patient:read",
-            "prediction:create", "prediction:read", "prediction:update", "prediction:review"
+            "prediction:create", "prediction:read", "prediction:update", "prediction:review",
+            "admin:verify"
         ]
     },
     "technician": {

@@ -1,0 +1,81 @@
+{
+  "timestamp": "2026-01-16T13:36:55.890699",
+  "base_url": "http://localhost:8000",
+  "summary": {
+    "passed": 8,
+    "failed": 3,
+    "skipped": 3
+  },
+  "results": [
+    {
+      "name": "GET /",
+      "status": "PASS",
+      "message": "Status: 200"
+    },
+    {
+      "name": "GET /health",
+      "status": "PASS",
+      "message": "Model loaded: True"
+    },
+    {
+      "name": "GET /metrics",
+      "status": "PASS",
+      "message": "Prometheus metrics available"
+    },
+    {
+      "name": "POST /auth/register (new user)",
+      "status": "FAIL",
+      "message": "Status: 404"
+    },
+    {
+      "name": "POST /auth/login (admin)",
+      "status": "FAIL",
+      "message": "Could not login with any admin credentials"
+    },
+    {
+      "name": "GET /patients (no auth)",
+      "status": "FAIL",
+      "message": "Correctly rejected: 404"
+    },
+    {
+      "name": "Patient tests",
+      "status": "SKIP",
+      "message": "No admin token available"
+    },
+    {
+      "name": "POST /predict-with-explanation",
+      "status": "PASS",
+      "message": "Label: glaucoma, Heatmap: True, Overlay: True"
+    },
+    {
+      "name": "Save heatmap",
+      "status": "PASS",
+      "message": "Saved to outputs\\heatmaps\\heatmap_20260116_133651.png"
+    },
+    {
+      "name": "Save overlay",
+      "status": "PASS",
+      "message": "Saved to outputs\\heatmaps\\overlay_20260116_133651.png"
+    },
+    {
+      "name": "Verification tests",
+      "status": "SKIP",
+      "message": "No admin token available"
+    },
+    {
+      "name": "Merge tests",
+      "status": "SKIP",
+      "message": "No admin token available"
+    },
+    {
+      "name": "GET /docs (Swagger UI)",
+      "status": "PASS",
+      "message": "Available"
+    },
+    {
+      "name": "GET /openapi.json",
+      "status": "PASS",
+      "message": "20 endpoints documented"
+    }
+  ]
+}

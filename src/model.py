@@ -429,22 +429,24 @@ class GradCAM:
         """
         self.model.eval()
         
-        # Enable gradients
-        input_tensor.requires_grad_(True)
-        
-        # Forward pass
-        output = self.model(input_tensor)
-        
-        if target_class is None:
-            target_class = (torch.sigmoid(output) > 0.5).int().item()
-        
-        # Backward pass
-        self.model.zero_grad()
-        
-        if target_class == 1:
-            output.backward()
-        else:
-            (-output).backward()
+        # Enable gradients explicitly (even if we're in a no_grad context)
+        with torch.enable_grad():
+            # Create tensor with gradients
+            input_tensor = input_tensor.clone().detach().requires_grad_(True)
+            
+            # Forward pass
+            output = self.model(input_tensor)
+            
+            if target_class is None:
+                target_class = (torch.sigmoid(output) > 0.5).int().item()
+            
+            # Backward pass
+            self.model.zero_grad()
+            
+            if target_class == 1:
+                output.backward()
+            else:
+                (-output).backward()
         
         # Get gradients and activations
         gradients = self.gradients

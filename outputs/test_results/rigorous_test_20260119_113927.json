@@ -1,0 +1,9 @@
+{
+  "timestamp": "2026-01-19T11:39:27.260726",
+  "base_url": "http://localhost:8000",
+  "summary": {
+    "passed": 17,
+    "failed": 14,
+    "total": 31
+  }
+}

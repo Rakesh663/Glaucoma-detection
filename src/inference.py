@@ -369,18 +369,22 @@ class GlaucomaDetector:
         if return_explanation and self.generate_explanations:
             try:
                 if self.gradcam is not None:
-                    # Re-enable gradients for Grad-CAM
-                    image_tensor.requires_grad_(True)
-                    gradcam_heatmap = self.gradcam.generate(image_tensor)
+                    # Create fresh tensor with gradients enabled for Grad-CAM
+                    # (prediction was done in no_grad context, so we need a new forward pass)
+                    gradcam_input = image_tensor.clone().detach().requires_grad_(True)
+                    gradcam_heatmap = self.gradcam.generate(gradcam_input)
                     gradcam_overlay = self.gradcam.generate_overlay(
-                        original_image, image_tensor
+                        original_image, gradcam_input
                     )
                 
                 # Get attention map if available
                 if hasattr(self.model, 'attention_map'):
                     attention_map = self.model.attention_map.squeeze().cpu().numpy()
             except Exception as e:
+                import traceback
                 warnings.warn(f"Explanation generation failed: {e}")
+                print(f"DEBUG GradCAM Error: {e}")
+                traceback.print_exc()
         
         # Determine risk level and recommendations
         risk_level = self._get_risk_level(result['probability'])
