@@ -3,16 +3,24 @@ Authentication routes
 Handles login, registration, token refresh, and OAuth
 """
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
 from passlib.context import CryptContext
 from datetime import datetime
+from typing import Optional
 
 from ..database.session import get_db
 from ..database.models import User, Tenant, Role
 from ..auth.jwt import create_access_token, create_refresh_token, refresh_access_token, get_current_active_user
 from ..utils.logging_config import logger
+
+# OAuth2 scheme for logout endpoint
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/v1/auth/login")
+
+# Account lockout settings
+MAX_FAILED_LOGIN_ATTEMPTS = 5
+ACCOUNT_LOCKOUT_MESSAGE = "Account locked due to too many failed login attempts. Please contact administrator."
 
 # ============================================================================
 # Router Setup
@@ -94,6 +102,14 @@ async def login(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Check if account is locked (too many failed attempts)
+    if user.failed_login_attempts >= MAX_FAILED_LOGIN_ATTEMPTS:
+        logger.warning(f"Login attempt failed: account locked - {form_data.username}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ACCOUNT_LOCKOUT_MESSAGE
         )
 
     # Verify password
@@ -307,3 +323,153 @@ async def get_current_user_info(
         "is_verified": current_user.is_verified,
         "is_superuser": current_user.is_superuser
     }
+
+
+# ============================================================================
+# New Security Endpoints
+# ============================================================================
+
+class LogoutRequest(BaseModel):
+    """Logout request - optionally include refresh token to revoke"""
+    refresh_token: Optional[str] = None
+
+class PasswordChangeRequest(BaseModel):
+    """Password change request"""
+    current_password: str
+    new_password: str
+
+class LogoutResponse(BaseModel):
+    status: str
+    message: str
+
+class PasswordChangeResponse(BaseModel):
+    status: str
+    message: str
+
+
+@router.post("/logout", response_model=LogoutResponse)
+async def logout(
+    request: LogoutRequest = None,
+    authorization: str = Depends(oauth2_scheme),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Logout user and invalidate tokens.
+    
+    This endpoint:
+    1. Blacklists the current access token
+    2. Optionally blacklists the refresh token
+    3. Tokens are invalid until they expire
+    
+    Args:
+        request: Optional logout request with refresh token
+        authorization: Current access token
+        current_user: Current authenticated user
+        db: Database session
+        
+    Returns:
+        Logout confirmation
+    """
+    from ..utils.token_blacklist import token_blacklist
+    from ..auth.jwt import verify_token
+    
+    try:
+        # Decode current access token to get JTI and expiry
+        payload = verify_token(authorization, token_type="access")
+        jti = payload.get("jti")
+        exp = payload.get("exp")
+        
+        if jti and exp:
+            # Add access token to blacklist
+            await token_blacklist.add_token(jti, exp)
+            logger.info(f"User {current_user.email} logged out, token revoked")
+        
+        # If refresh token provided, blacklist it too
+        if request and request.refresh_token:
+            try:
+                refresh_payload = verify_token(request.refresh_token, token_type="refresh")
+                refresh_jti = refresh_payload.get("jti")
+                refresh_exp = refresh_payload.get("exp")
+                if refresh_jti and refresh_exp:
+                    await token_blacklist.add_token(refresh_jti, refresh_exp)
+            except Exception:
+                pass  # Ignore invalid refresh token
+        
+        return LogoutResponse(
+            status="success",
+            message="Successfully logged out. Token has been revoked."
+        )
+        
+    except Exception as e:
+        logger.error(f"Logout error: {e}")
+        # Even on error, return success (logout should always "succeed")
+        return LogoutResponse(
+            status="success",
+            message="Logged out"
+        )
+
+
+@router.post("/change-password", response_model=PasswordChangeResponse)
+async def change_password(
+    request: PasswordChangeRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Change user password and invalidate all existing tokens.
+    
+    This endpoint:
+    1. Verifies the current password
+    2. Updates to the new password
+    3. Revokes ALL tokens issued before this change
+    
+    Args:
+        request: Password change request
+        current_user: Current authenticated user
+        db: Database session
+        
+    Returns:
+        Password change confirmation
+    """
+    from ..utils.token_blacklist import token_blacklist
+    
+    # Validate password requirements
+    if len(request.new_password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be at least 8 characters"
+        )
+    
+    # Verify current password
+    if not verify_password(request.current_password, current_user.hashed_password):
+        logger.warning(f"Password change failed: incorrect current password for {current_user.email}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Current password is incorrect"
+        )
+    
+    # Check new password is different
+    if request.current_password == request.new_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be different from current password"
+        )
+    
+    # Update password
+    current_user.hashed_password = get_password_hash(request.new_password)
+    current_user.updated_at = datetime.utcnow()
+    db.commit()
+    
+    # Revoke all existing tokens for this user
+    await token_blacklist.revoke_all_user_tokens(
+        user_id=current_user.id,
+        issued_before=datetime.utcnow()
+    )
+    
+    logger.info(f"Password changed for user {current_user.email}, all tokens revoked")
+    
+    return PasswordChangeResponse(
+        status="success",
+        message="Password changed successfully. Please login again with your new password."
+    )

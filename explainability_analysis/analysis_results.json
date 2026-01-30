@@ -1,0 +1,97 @@
+{
+  "timestamp": "2026-01-30T13:04:46.032332",
+  "total_images": 4,
+  "results": [
+    {
+      "filename": "g1020_image_1000.jpg",
+      "actual_label": "glaucoma",
+      "predicted_label": "normal",
+      "probability": 0.4087236821651459,
+      "confidence": 0.5912763178348541,
+      "risk_level": "Moderate",
+      "uncertainty": 0.07716348767280579,
+      "quality_score": 1.0,
+      "recommendations": [
+        "\u26a1 Moderate risk indicators detected",
+        "\ud83d\udccb Schedule comprehensive eye examination within 1-2 months",
+        "\ud83d\udd2c Visual field testing (perimetry) recommended",
+        "\ud83d\udcca Regular IOP (intraocular pressure) monitoring advised",
+        "\ud83d\udc68\u200d\u2695\ufe0f Follow up with ophthalmologist for clinical evaluation"
+      ],
+      "processing_time_ms": 54365.94,
+      "saved_files": {
+        "heatmap": "explainability_analysis\\g1020_image_1000_heatmap.png",
+        "overlay": "explainability_analysis\\g1020_image_1000_overlay.png"
+      }
+    },
+    {
+      "filename": "g1020_image_1001.jpg",
+      "actual_label": "glaucoma",
+      "predicted_label": "normal",
+      "probability": 0.44364747405052185,
+      "confidence": 0.5563525259494781,
+      "risk_level": "Moderate",
+      "uncertainty": 0.06901111453771591,
+      "quality_score": 1.0,
+      "recommendations": [
+        "\u26a1 Moderate risk indicators detected",
+        "\ud83d\udccb Schedule comprehensive eye examination within 1-2 months",
+        "\ud83d\udd2c Visual field testing (perimetry) recommended",
+        "\ud83d\udcca Regular IOP (intraocular pressure) monitoring advised",
+        "\ud83d\udc68\u200d\u2695\ufe0f Follow up with ophthalmologist for clinical evaluation"
+      ],
+      "processing_time_ms": 38215.35,
+      "saved_files": {
+        "heatmap": "explainability_analysis\\g1020_image_1001_heatmap.png",
+        "overlay": "explainability_analysis\\g1020_image_1001_overlay.png"
+      }
+    },
+    {
+      "filename": "g1020_image_0.jpg",
+      "actual_label": "normal",
+      "predicted_label": "glaucoma",
+      "probability": 0.6651602983474731,
+      "confidence": 0.6651602983474731,
+      "risk_level": "Moderate",
+      "uncertainty": 0.023430371657013893,
+      "quality_score": 1.0,
+      "recommendations": [
+        "\u26a1 Moderate risk indicators detected",
+        "\ud83d\udccb Schedule comprehensive eye examination within 1-2 months",
+        "\ud83d\udd2c Visual field testing (perimetry) recommended",
+        "\ud83d\udcca Regular IOP (intraocular pressure) monitoring advised",
+        "\ud83d\udc68\u200d\u2695\ufe0f Follow up with ophthalmologist for clinical evaluation"
+      ],
+      "processing_time_ms": 46517.68,
+      "saved_files": {
+        "heatmap": "explainability_analysis\\g1020_image_0_heatmap.png",
+        "overlay": "explainability_analysis\\g1020_image_0_overlay.png"
+      }
+    },
+    {
+      "filename": "g1020_image_1.jpg",
+      "actual_label": "normal",
+      "predicted_label": "glaucoma",
+      "probability": 0.7235457897186279,
+      "confidence": 0.7235457897186279,
+      "risk_level": "High",
+      "uncertainty": 0.03803269565105438,
+      "quality_score": 1.0,
+      "recommendations": [
+        "\ud83d\udea8 HIGH RISK: Strong indicators of glaucoma detected",
+        "\ud83d\udcde URGENT: Schedule ophthalmologist appointment within 1 week",
+        "\ud83c\udfe5 Comprehensive eye examination including:",
+        "   - Optic nerve imaging (OCT)",
+        "   - Visual field testing",
+        "   - Gonioscopy (drainage angle assessment)",
+        "   - IOP measurement",
+        "\u23f0 Early treatment is critical to prevent vision loss"
+      ],
+      "processing_time_ms": 49109.27,
+      "saved_files": {
+        "heatmap": "explainability_analysis\\g1020_image_1_heatmap.png",
+        "overlay": "explainability_analysis\\g1020_image_1_overlay.png"
+      }
+    }
+  ]
+}

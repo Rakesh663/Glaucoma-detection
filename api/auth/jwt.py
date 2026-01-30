@@ -3,6 +3,7 @@ JWT token creation and verification
 Handles access tokens and refresh tokens
 """
 import os
+import uuid
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from jose import JWTError, jwt
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from ..database.session import get_db
 from ..database.models import User
+from ..utils.logging_config import logger
 
 # ============================================================================
 # JWT Configuration
@@ -21,6 +23,15 @@ SECRET_KEY = os.getenv("JWT_SECRET_KEY", "change_this_super_secret_key_in_produc
 ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", "7"))
+
+# Security check: Warn if using default secret in production
+if SECRET_KEY == "change_this_super_secret_key_in_production":
+    import warnings
+    warnings.warn(
+        "⚠️  WARNING: Using default JWT_SECRET_KEY. Set a secure key in production!",
+        UserWarning
+    )
+    logger.warning("Using default JWT_SECRET_KEY - NOT SECURE FOR PRODUCTION!")
 
 # OAuth2 scheme for token extraction
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/v1/auth/login")
@@ -57,10 +68,14 @@ def create_token(
         else:
             expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
 
+    # Add unique token ID (JTI) for revocation support
+    token_id = str(uuid.uuid4())
+    
     to_encode.update({
         "exp": expire,
         "iat": datetime.utcnow(),
-        "type": token_type
+        "type": token_type,
+        "jti": token_id  # Unique token ID for blacklisting
     })
 
     # Encode token

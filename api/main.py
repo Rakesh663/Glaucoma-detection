@@ -43,6 +43,7 @@ from api.auth.rbac import RequirePermission
 from api.routes import auth as auth_router
 from api.routes import patients as patients_router
 from api.routes import admin_verification as admin_router
+from api.routes import user_management as user_management_router
 
 
 class PredictionResponse(BaseModel):
@@ -124,6 +125,7 @@ app.add_middleware(RateLimitMiddleware, enable_per_ip=True)
 app.include_router(auth_router.router)
 app.include_router(patients_router.router)
 app.include_router(admin_router.router)
+app.include_router(user_management_router.router)
 
 detector = None
 app_start_time = None
